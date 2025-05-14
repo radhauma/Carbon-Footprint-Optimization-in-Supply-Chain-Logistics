@@ -1,0 +1,272 @@
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.callbacks import EarlyStopping
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+file_path = 'CO2_Emissions_Canada.csv' 
+try:
+    df = pd.read_csv("CO2 Emissions_Canada.csv")
+except FileNotFoundError:
+    print(f"Error: The file '{file_path}' was not found.")
+    print("Please ensure the CSV file is in the correct location or update the 'file_path' variable.")
+    exit()
+
+print("Original DataFrame head:")
+print(df.head())
+print("\nDataFrame info:")
+df.info()
+
+
+df.columns = df.columns.str.replace('[^A-Za-z0-9_]+', '', regex=True)
+df.rename(columns={
+    'EngineSizeL': 'Engine_Size_L',
+    'FuelConsumptionCityL100km': 'Fuel_Consumption_City_L_100km',
+    'FuelConsumptionHwyL100km': 'Fuel_Consumption_Hwy_L_100km',
+    'FuelConsumptionCombL100km': 'Fuel_Consumption_Comb_L_100km',
+    'FuelConsumptionCombmpg': 'Fuel_Consumption_Comb_mpg',
+    'CO2Emissionsgkm': 'CO2_Emissions_g_km',
+    'VehicleClass': 'Vehicle_Class',
+    'FuelType': 'Fuel_Type'
+}, inplace=True)
+
+print("\nCleaned DataFrame columns:")
+print(df.columns)
+print("\nCleaned DataFrame head:")
+print(df.head())
+
+
+
+print("\nBasic statistics:")
+print(df.describe())
+
+
+numerical_features_eda = ['Engine_Size_L', 'Cylinders', 'Fuel_Consumption_City_L_100km',
+                      'Fuel_Consumption_Hwy_L_100km', 'Fuel_Consumption_Comb_L_100km',
+                      'Fuel_Consumption_Comb_mpg', 'CO2_Emissions_g_km']
+categorical_features_eda = ['Make', 'Vehicle_Class', 'Transmission', 'Fuel_Type']
+
+
+
+df[numerical_features_eda].hist(bins=15, figsize=(18, 12), layout=(3, 3)) 
+plt.suptitle("Histograms of Numerical Features from CO2 Emissions Data")
+plt.tight_layout(rect=[0, 0, 1, 0.96])
+print("\nGenerating EDA plots (Histograms, Boxplots, Correlation Matrix)...")
+
+
+for cat_col in categorical_features_eda:
+    
+    if df[cat_col].nunique() > 15 and cat_col == 'Make': 
+        top_n = df[cat_col].value_counts().nlargest(10).index
+        df_top_n = df[df[cat_col].isin(top_n)]
+        plt.figure(figsize=(12, 6))
+        sns.boxplot(x=cat_col, y='CO2_Emissions_g_km', data=df_top_n)
+        plt.title(f'CO2 Emissions by Top 10 {cat_col}')
+        plt.xticks(rotation=45, ha='right')
+    elif df[cat_col].nunique() <= 20: 
+        plt.figure(figsize=(10, 6))
+        sns.boxplot(x=cat_col, y='CO2_Emissions_g_km', data=df)
+        plt.title(f'CO2 Emissions by {cat_col}')
+        plt.xticks(rotation=45, ha='right')
+    else:
+        print(f"Skipping boxplot for {cat_col} due to high cardinality ({df[cat_col].nunique()} unique values).")
+    plt.tight_layout()
+
+
+plt.figure(figsize=(12, 10))
+
+numeric_df_for_corr = df[numerical_features_eda].copy()
+correlation_matrix = numeric_df_for_corr.corr()
+sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt=".2f")
+plt.title('Correlation Matrix of Numerical Features (CO2 Emissions Data)')
+plt.tight_layout()
+
+
+
+target_column = 'CO2_Emissions_g_km'
+X = df.drop(columns=[target_column, 'Model']) 
+y = df[target_column]
+
+
+numerical_cols = ['Engine_Size_L', 'Cylinders', 'Fuel_Consumption_City_L_100km',
+                  'Fuel_Consumption_Hwy_L_100km', 'Fuel_Consumption_Comb_L_100km',
+                  'Fuel_Consumption_Comb_mpg']
+categorical_cols = ['Make', 'Vehicle_Class', 'Transmission', 'Fuel_Type']
+
+
+numerical_cols = [col for col in numerical_cols if col in X.columns]
+categorical_cols = [col for col in categorical_cols if col in X.columns]
+
+print(f"\nNumerical columns for model: {numerical_cols}")
+print(f"Categorical columns for model: {categorical_cols}")
+
+
+numerical_pipeline = Pipeline([
+    ('imputer', SimpleImputer(strategy='mean')), 
+    ('scaler', StandardScaler())                  
+])
+
+categorical_pipeline = Pipeline([
+    ('imputer', SimpleImputer(strategy='most_frequent')), 
+    ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False)) 
+])
+
+
+preprocessor = ColumnTransformer([
+    ('num', numerical_pipeline, numerical_cols),
+    ('cat', categorical_pipeline, categorical_cols)
+], remainder='passthrough')
+
+
+X_train_raw, X_temp_raw, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42)
+X_val_raw, X_test_raw, y_val, y_test = train_test_split(X_temp_raw, y_temp, test_size=0.5, random_state=42)
+
+
+preprocessor.fit(X_train_raw)
+
+
+X_train = preprocessor.transform(X_train_raw)
+X_val = preprocessor.transform(X_val_raw)
+X_test = preprocessor.transform(X_test_raw)
+
+
+
+try:
+    feature_names_out = preprocessor.get_feature_names_out()
+    X_train_df = pd.DataFrame(X_train, columns=feature_names_out)
+    print("\nProcessed training features head:")
+    print(X_train_df.head())
+except AttributeError:
+    print("\nCould not get feature names out using get_feature_names_out (likely older scikit-learn).")
+    
+    pass
+except Exception as e:
+    print(f"\nError getting feature names: {e}")
+
+
+print(f"\nTrain shape: {X_train.shape}, y_train shape: {y_train.shape}")
+print(f"Validation shape: {X_val.shape}, y_val shape: {y_val.shape}")
+print(f"Test shape: {X_test.shape}, y_test shape: {y_test.shape}")
+
+
+if np.isnan(X_train).any() or np.isinf(X_train).any():
+    print("NaN or Inf found in X_train after processing. Check imputation and scaling.")
+if np.isnan(X_val).any() or np.isinf(X_val).any():
+    print("NaN or Inf found in X_val after processing.")
+if np.isnan(X_test).any() or np.isinf(X_test).any():
+    print("NaN or Inf found in X_test after processing.")
+
+
+
+num_features_in_model = X_train.shape[1] 
+
+model = Sequential([
+    Dense(128, activation='relu', input_shape=(num_features_in_model,)),
+    Dropout(0.3), 
+    Dense(64, activation='relu'),
+    Dropout(0.3),
+    Dense(32, activation='relu'),
+    Dense(1, activation='linear') 
+])
+
+
+optimizer = tf.keras.optimizers.Adam(learning_rate=0.001) 
+model.compile(optimizer=optimizer,
+              loss='mean_squared_error',
+              metrics=['mae', 'mse'])
+
+print("\nModel Summary:")
+model.summary()
+
+
+
+early_stopping = EarlyStopping(monitor='val_loss',
+                              patience=15, 
+                              restore_best_weights=True)
+print("\nStarting model training...")
+history = model.fit(X_train, y_train,
+                    epochs=150, 
+                    batch_size=32,
+                    validation_data=(X_val, y_val),
+                    callbacks=[early_stopping],
+                    verbose=1)
+
+
+print("\nGenerating training history plots...")
+plt.figure(figsize=(12, 5))
+
+
+plt.subplot(1, 2, 1)
+plt.plot(history.history['loss'], label='Train Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title('Model Loss')
+plt.ylabel('Loss (MSE)')
+plt.xlabel('Epoch')
+plt.legend(loc='upper right')
+
+
+plt.subplot(1, 2, 2)
+plt.plot(history.history['mae'], label='Train MAE')
+plt.plot(history.history['val_mae'], label='Validation MAE')
+plt.title('Model MAE')
+plt.ylabel('MAE')
+plt.xlabel('Epoch')
+plt.legend(loc='upper right')
+
+plt.tight_layout()
+
+
+
+test_loss, test_mae, test_mse = model.evaluate(X_test, y_test, verbose=0)
+test_rmse = np.sqrt(test_mse)
+
+print(f"\n--- Test Set Performance ---")
+print(f"Test Loss (MSE): {test_loss:.2f}")
+print(f"Test MAE: {test_mae:.2f} (g CO2/km)")
+print(f"Test RMSE: {test_rmse:.2f} (g CO2/km)")
+
+
+y_pred_test = model.predict(X_test).flatten()
+
+
+comparison_df = pd.DataFrame({'Actual_CO2_Emissions': y_test.values.flatten(),
+                               'Predicted_CO2_Emissions': y_pred_test})
+print("\nSample of Actual vs. Predicted values on Test Set:")
+print(comparison_df.head(10))
+
+
+print("\nGenerating prediction analysis plots...")
+plt.figure(figsize=(8, 8))
+plt.scatter(y_test, y_pred_test, alpha=0.5)
+
+min_val = min(y_test.min(), y_pred_test.min())
+max_val = max(y_test.max(), y_pred_test.max())
+plt.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2)
+plt.xlabel('Actual CO2 Emissions (g/km)')
+plt.ylabel('Predicted CO2 Emissions (g/km)')
+plt.title('Actual vs. Predicted CO2 Emissions on Test Set')
+plt.grid(True)
+
+
+residuals = y_test.values.flatten() - y_pred_test
+plt.figure(figsize=(8, 5))
+plt.scatter(y_pred_test, residuals, alpha=0.5)
+plt.hlines(0, xmin=y_pred_test.min(), xmax=y_pred_test.max(), colors='red', linestyles='--')
+plt.xlabel('Predicted CO2 Emissions (g/km)')
+plt.ylabel('Residuals (Actual - Predicted)')
+plt.title('Residual Plot')
+plt.grid(True)
+
+
+plt.show()
+
+print("\n Execution Over ")
